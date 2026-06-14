@@ -23,7 +23,7 @@ from telegram.ext import (
 
 # ================== 配置区域 ==================
 TOKEN = "8718624772:AAFJZhmsTC_C38aG7AakMTriGY7kmjwhJLE"
-ADMIN_USER_ID = 8717474274
+ADMIN_USER_ID = 8583223263
 WELCOME_CHAT_IDS = [ADMIN_USER_ID]
 
 # ================== OkayPay API 配置 ==================
