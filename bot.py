@@ -266,7 +266,7 @@ def get_welcome_message(admin_name: str) -> str:
         "🛰️【频道】 https://t.me/ltnb66678\n"
         "👥【群组】 https://t.me/huhbjise\n"
         "☎️【客服】 @nbbv354\n"
-        "🛠️【工具】 @NBTG1BOT\n"
+        "🛠️【作者】 @APl520需要克隆来找我支持免费部署\n"
         "🌐【零售】 https://buy.wlqfk.net/shop/41WFDSM2\n\n"
         "⚙ /start   ⬅点击命令打开底部菜单\n\n"
         "机器人支持USDT 人民币充值 不接受使用后售后"
