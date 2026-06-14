@@ -23,14 +23,14 @@ from telegram.ext import (
 
 # ================== 配置区域 ==================
 TOKEN = "8718624772:AAFJZhmsTC_C38aG7AakMTriGY7kmjwhJLE"
-ADMIN_USER_ID = 1399590660
+ADMIN_USER_ID = 8717474274
 WELCOME_CHAT_IDS = [ADMIN_USER_ID]
 
 # ================== OkayPay API 配置 ==================
 API_URL = 'https://api.okaypay.me/shop/'
-shop_id = "34543"
-shop_token = "8fkGUXg5BszGHK1MPb3SFhWpYLt2Jwa"
-NAME = "辞念纵横1"
+shop_id = "34721"
+shop_token = "9d6eikQToUqx5BsEG1ObSchWY04w7Zan"
+NAME = "乱天1"
 bot_username = "ghfjk520bot"
 
 # 数据文件路径
@@ -282,7 +282,7 @@ async def get_shop_name(context: ContextTypes.DEFAULT_TYPE) -> str:
         admin_name = admin_user.full_name or admin_user.username or "管理员"
         return f"🎫 {admin_name}のTG号铺"
     except:
-        return "🎫 大爱のTG号铺"
+        return "🎫 のTG号铺"
 
 # ================== 键盘构建 ==================
 async def get_main_menu_keyboard(context: ContextTypes.DEFAULT_TYPE, is_admin_user: bool = False) -> InlineKeyboardMarkup:
@@ -882,7 +882,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         if not categories:
             await update.message.reply_text("📂 *商品分类*\n\n暂无商品分类，请联系管理员添加。", parse_mode="Markdown")
         else:
-            await update.message.reply_text("📂 *商品分类*\n\n请选择您需要的类别：", reply_markup=get_product_categories_keyboard(), parse_mode="Markdown")
+            await update.message.reply_text("📂 *商品分类*\n\n请选择您需要购买的账号当前可支持okpay支付", reply_markup=get_product_categories_keyboard(), parse_mode="Markdown")
     elif text == "👤 我的余额":
         balance = user_balances.get(user_id, 0.0)
         await update.message.reply_text(f"💰 *我的余额*\n\n当前余额：`{balance:.4f} USDT`", parse_mode="Markdown")
