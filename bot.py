@@ -25,7 +25,7 @@ from telegram.ext import (
 )
 
 # ================== 配置区域 ==================
-TOKEN = "8718624772:AAFJZhmsTC_C38aG7AakMTriGY7kmjwhJLE"
+TOKEN = "8976034638:AAFGgRkINfc7f7XFxHn1YprxrGAHIKTrL2A"
 ADMIN_USER_ID = 8717474274
 WELCOME_CHAT_IDS = [ADMIN_USER_ID]
 
