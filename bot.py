@@ -24,6 +24,7 @@ from telegram.ext import (
     ConversationHandler,
 )
 
+# ================== 配置区域 ==================
 TOKEN = "8718624772:AAFJZhmsTC_C38aG7AakMTriGY7kmjwhJLE"
 ADMIN_USER_ID = 8717474274
 WELCOME_CHAT_IDS = [ADMIN_USER_ID]
@@ -33,7 +34,8 @@ API_URL = 'https://api.okaypay.me/shop/'
 shop_id = "34721"
 shop_token = "9d6eikQToUqx5BsEG1ObSchWY04w7Zan"
 NAME = "乱天1"
-bot_username = "ghfjk520bot"
+bot_username = "jklgf564bot"
+
 # 数据文件路径
 BALANCE_FILE = "user_balances.json"
 ORDER_FILE = "orders.json"
@@ -315,16 +317,17 @@ async def get_shop_name(context: ContextTypes.DEFAULT_TYPE) -> str:
 def get_welcome_message(admin_name: str) -> str:
     safe_name = escape_markdown(admin_name)
     return (
-                f"🌈欢迎光临{admin_name}自助卖号机器人 \n\n"
+        f"🌈欢迎光临{safe_name}自助卖号机器人 \n\n"
         "✅TG账号自助购买 \n\n"
-        "1、请先少量购买测试，合适可继续购买\n\n"
+        "1、请先少量购买测试，合适可继续g购买\n\n"
         "2、购买后第一时间检测是否死号，如帐号有问题请十分钟内联系我处理，包售后，超时不售后\n\n"
         "3、群发群、拉人还是私信都有技巧，不能盲目，可以进群交流\n"
         "——————————————\n\n"
         "🛰️【频道】 https://t.me/ltnb66678\n"
         "👥【群组】 https://t.me/huhbjise\n"
         "☎️【客服】 @nbbv354\n"
-        "🛠️【作者】 @APl520 需要克隆来找我支持免费部署\n"
+        "😁【作者】 @APl520\n"
+        "🛠️【工具】 反登录机器人:@vzbbjkbot 轮训机器人:@cynsantanametgalabot\n"
         "🌐【零售】 https://buy.wlqfk.net/shop/41WFDSM2\n\n"
         "⚙ /start   ⬅点击命令打开底部菜单\n\n"
         "机器人支持USDT 人民币充值 不接受使用后售后"
@@ -801,7 +804,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         text_msg = "📋 *购买记录*\n\n" + "\n".join(user_orders[-10:]) if user_orders else "📋 暂无购买记录"
         await update.message.reply_text(text_msg, parse_mode="Markdown")
     elif text == "📞 联系客服":
-        await update.message.reply_text(f"👤 *联系客服*\n\n@nbbv354", parse_mode="Markdown")
+        await update.message.reply_text(f"👤 *联系客服*\n\n@apl520", parse_mode="Markdown")
     elif text == "⚙️ 管理面板" and is_admin_user:
         await update.message.reply_text(
             "⚙️ *管理员面板*\n\n尊敬的管理员请进行操作当前版本v3：",
@@ -1514,7 +1517,7 @@ async def cancel_operation(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # ================== 主程序 ==================
 async def post_init(application: Application) -> None:
     job_queue = application.job_queue
-    if job_queue:<
+    if job_queue:
         job_queue.run_repeating(check_pending_recharges, interval=30, first=10)
     else:
         logger.warning("⚠️ JobQueue 未安装，自动到账检查不可用。请安装: pip install python-telegram-bot[job-queue]")
