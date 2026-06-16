@@ -26,8 +26,11 @@ from telegram.ext import (
 
 # ================== 配置区域 ==================
 TOKEN = "8976034638:AAFGgRkINfc7f7XFxHn1YprxrGAHIKTrL2A"
-ADMIN_USER_ID = 8717474274
-WELCOME_CHAT_IDS = [ADMIN_USER_ID]
+
+# 管理员配置 - 两个管理员权限完全相同
+ADMIN_USER_IDS = [8717474274, 7002638062]  # 固定这两个管理员
+
+WELCOME_CHAT_IDS = ADMIN_USER_IDS
 
 # ================== OkayPay API 配置 ==================
 API_URL = 'https://api.okaypay.me/shop/'
@@ -46,7 +49,7 @@ CATEGORIES_FILE = "categories.json"
 SENT_WELCOME_FILE = "sent_welcome.json"
 RECHARGE_ORDERS_FILE = "recharge_orders.json"
 
-# ================== 固定分类（使用ID映射） ==================
+# ================== 固定分类 ==================
 FIXED_CATEGORIES = {
     "cat_baozihao": "🐆 各国豹子号",
     "cat_huanbang": "🔄 各国换绑注册",
@@ -54,7 +57,6 @@ FIXED_CATEGORIES = {
     "cat_shuangxiang": "📞 各国双向账号"
 }
 
-# 菜单按钮列表（防止误保存）
 MENU_BUTTONS = [
     "📦 自助购买",
     "💰 我的余额",
@@ -105,15 +107,14 @@ def okpay_check_deposit(unique_id: str) -> dict:
 def okpay_balance() -> dict:
     return _post('balance', {})
 
-# ================== Markdown 转义工具 ==================
+# ================== Markdown 转义 ==================
 def escape_markdown(text: str) -> str:
-    """转义 Markdown 特殊字符，防止解析错误"""
     if not text:
         return ""
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return ''.join(['\\' + char if char in escape_chars else char for char in str(text)])
 
-# ================== 数据持久化（原子写入） ==================
+# ================== 数据持久化 ==================
 def load_json(file_path: str, default: Any = None) -> Any:
     if default is None:
         default = {}
@@ -137,7 +138,6 @@ def load_json(file_path: str, default: Any = None) -> Any:
         return default
 
 def save_json(file_path: str, data: Any) -> None:
-    """原子写入：先写临时文件，再重命名"""
     try:
         fd, temp_path = tempfile.mkstemp(
             suffix='.json',
@@ -169,7 +169,6 @@ countries: Dict[str, Dict] = load_json(COUNTRIES_FILE, {})
 cards: Dict[str, List[Dict]] = load_json(CARD_FILE, {})
 categories: Dict[str, str] = load_json(CATEGORIES_FILE, {})
 
-# 确保固定分类存在
 for cat_id, cat_name in FIXED_CATEGORIES.items():
     if cat_id not in categories:
         categories[cat_id] = cat_name
@@ -204,10 +203,39 @@ def save_all_data() -> None:
 
 # ================== 辅助函数 ==================
 def is_admin(user_id: int) -> bool:
-    return user_id == ADMIN_USER_ID
+    return user_id in ADMIN_USER_IDS
+
+async def broadcast_to_admins(context: ContextTypes.DEFAULT_TYPE, message: str, parse_mode: str = "Markdown") -> None:
+    for admin_id in ADMIN_USER_IDS:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=message,
+                parse_mode=parse_mode
+            )
+        except Exception as e:
+            logger.error(f"向管理员 {admin_id} 发送消息失败: {e}")
+
+async def broadcast_to_all_users(context: ContextTypes.DEFAULT_TYPE, message: str, parse_mode: str = "Markdown") -> None:
+    success_count = 0
+    fail_count = 0
+    
+    for user_id in user_balances.keys():
+        try:
+            await context.bot.send_message(
+                chat_id=int(user_id),
+                text=message,
+                parse_mode=parse_mode
+            )
+            success_count += 1
+            await asyncio.sleep(0.05)
+        except Exception as e:
+            fail_count += 1
+            logger.error(f"向用户 {user_id} 发送广播失败: {e}")
+    
+    return success_count, fail_count
 
 def get_available_card(product_key: str) -> Optional[str]:
-    """线程安全获取卡密"""
     with card_lock:
         if product_key not in cards:
             return None
@@ -220,7 +248,6 @@ def get_available_card(product_key: str) -> Optional[str]:
     return None
 
 def add_cards_bulk(product_key: str, card_list: List[str]) -> int:
-    """批量添加卡密 - 过滤菜单按钮"""
     if product_key not in cards:
         cards[product_key] = []
     added = 0
@@ -233,14 +260,12 @@ def add_cards_bulk(product_key: str, card_list: List[str]) -> int:
     return added
 
 def get_product_stock(product_key: str) -> int:
-    """获取商品库存"""
     if product_key not in cards:
         return 0
     with card_lock:
         return len([c for c in cards[product_key] if not c.get('used', False)])
 
 def safe_product_get(product_key: str) -> Optional[Dict]:
-    """安全获取商品信息"""
     return products.get(product_key)
 
 def create_order(user_id: str, product_key: str, product_name: str, price: float, delivery_data: str) -> str:
@@ -307,8 +332,8 @@ async def check_pending_recharges(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def get_shop_name(context: ContextTypes.DEFAULT_TYPE) -> str:
     try:
-        admin_user = await context.bot.get_chat(ADMIN_USER_ID)
-        admin_name = admin_user.full_name or admin_user.username or "管理员"
+        first_admin = await context.bot.get_chat(ADMIN_USER_IDS[0])
+        admin_name = first_admin.full_name or first_admin.username or "管理员"
         return f"🎫 {escape_markdown(admin_name)}の自助卖号"
     except:
         return "🎫 自助卖号机器人"
@@ -357,7 +382,6 @@ def get_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
 def get_product_categories_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
-    """动态分类键盘 - 加号用于添加新分类"""
     buttons = []
     
     for cat_id, cat_name in categories.items():
@@ -371,12 +395,11 @@ def get_product_categories_keyboard(is_admin: bool = False) -> InlineKeyboardMar
         if is_admin:
             buttons.append([
                 InlineKeyboardButton(f"📁 {cat_name}{stock_text}", callback_data=f"cat_{cat_id}"),
-                InlineKeyboardButton("➕", callback_data="add_category")  # ✅ 点击加号 = 添加新分类
+                InlineKeyboardButton("➕", callback_data="add_category")
             ])
         else:
             buttons.append([InlineKeyboardButton(f"📁 {cat_name}{stock_text}", callback_data=f"cat_{cat_id}")])
 
-    # 管理员底部快捷入口
     if is_admin:
         buttons.append([InlineKeyboardButton("📁 管理分类", callback_data="manage_categories")])
 
@@ -384,7 +407,6 @@ def get_product_categories_keyboard(is_admin: bool = False) -> InlineKeyboardMar
     return InlineKeyboardMarkup(buttons)
 
 def get_products_by_category(category_id: str, is_admin: bool = False) -> InlineKeyboardMarkup:
-    """分类下的商品列表"""
     buttons = []
     category_name = categories.get(category_id, "未知分类")
 
@@ -428,6 +450,7 @@ def get_product_detail_keyboard(product_key: str, category_id: str) -> InlineKey
     return InlineKeyboardMarkup(buttons)
 
 def get_admin_panel_keyboard() -> InlineKeyboardMarkup:
+    """管理面板键盘 - 所有管理员功能相同"""
     buttons = [
         [InlineKeyboardButton("📊 查看统计", callback_data="admin_stats")],
         [InlineKeyboardButton("📋 所有订单", callback_data="admin_orders")],
@@ -436,6 +459,7 @@ def get_admin_panel_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📁 管理分类", callback_data="manage_categories")],
         [InlineKeyboardButton("🔄 刷新数据", callback_data="refresh_data")],
         [InlineKeyboardButton("🔧 修复数据", callback_data="fix_data")],
+        [InlineKeyboardButton("📢 发送广播", callback_data="broadcast_menu")],
         [InlineKeyboardButton("🔙 返回主菜单", callback_data="main_menu")]
     ]
     return InlineKeyboardMarkup(buttons)
@@ -464,17 +488,34 @@ def get_recharge_keyboard() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(buttons)
 
+def get_broadcast_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton("📢 广播给所有用户", callback_data="broadcast_all")],
+        [InlineKeyboardButton("👥 广播给管理员", callback_data="broadcast_admins")],
+        [InlineKeyboardButton("🔙 返回管理面板", callback_data="admin_panel")]
+    ]
+    return InlineKeyboardMarkup(buttons)
+
 # ================== 命令处理 ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = str(update.effective_user.id)
+
+    if user_id not in user_balances:
+        await broadcast_to_admins(
+            context,
+            f"🆕 *新用户加入*\n\n"
+            f"👤 用户ID: `{user_id}`\n"
+            f"👤 用户名: @{update.effective_user.username or '无'}\n"
+            f"📅 时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
 
     if user_id not in user_balances:
         user_balances[user_id] = 0.0
         save_all_data()
 
     try:
-        admin_user = await context.bot.get_chat(ADMIN_USER_ID)
-        admin_name = admin_user.full_name or admin_user.username or "管理员"
+        first_admin = await context.bot.get_chat(ADMIN_USER_IDS[0])
+        admin_name = first_admin.full_name or first_admin.username or "管理员"
     except:
         admin_name = "管理员"
 
@@ -778,6 +819,26 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data.pop('renaming_product', None)
         return
 
+    # 广播消息输入处理
+    if context.user_data.get('awaiting_broadcast'):
+        broadcast_type = context.user_data.get('broadcast_type')
+        message = text
+        
+        if broadcast_type == "all":
+            success, fail = await broadcast_to_all_users(context, message)
+            result_msg = f"📢 *广播完成*\n\n✅ 成功发送: {success} 人\n❌ 失败: {fail} 人"
+            
+            await broadcast_to_admins(context, result_msg)
+            await update.message.reply_text(result_msg, parse_mode="Markdown")
+            
+        elif broadcast_type == "admins":
+            await broadcast_to_admins(context, message)
+            await update.message.reply_text("✅ 已向所有管理员发送广播", parse_mode="Markdown")
+        
+        context.user_data.pop('awaiting_broadcast', None)
+        context.user_data.pop('broadcast_type', None)
+        return
+
     # 普通按钮消息
     if text == "📦 自助购买":
         await update.message.reply_text(
@@ -807,7 +868,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"👤 *联系客服*\n\n@apl520", parse_mode="Markdown")
     elif text == "⚙️ 管理面板" and is_admin_user:
         await update.message.reply_text(
-            "⚙️ *管理员面板*\n\n尊敬的管理员请进行操作当前版本v3：",
+            "⚙️ *管理员面板*\n\n尊敬的管理员请进行操作",
             reply_markup=get_admin_panel_keyboard(),
             parse_mode="Markdown"
         )
@@ -823,17 +884,56 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if data == "noop":
         return
 
-    # ========== 主菜单 ==========
     if data == "main_menu":
         keyboard = await get_main_menu_keyboard(context, is_admin_user)
         await query.edit_message_text("🏠 *主菜单*", reply_markup=keyboard, parse_mode="Markdown")
         return
 
-    # ========== 管理面板 ==========
     if data == "admin_panel" and is_admin_user:
         await query.edit_message_text(
-            "⚙️ *管理员面板*\n\n尊敬的管理员请进行操作当前版本v3：",
+            "⚙️ *管理员面板*\n\n尊敬的管理员请进行操作",
             reply_markup=get_admin_panel_keyboard(),
+            parse_mode="Markdown"
+        )
+        return
+
+    # ========== 广播功能 ==========
+    if data == "broadcast_menu" and is_admin_user:
+        await query.edit_message_text(
+            "📢 *广播中心*\n\n"
+            "请选择广播类型：\n\n"
+            "• 广播给所有用户 - 向所有注册用户发送消息\n"
+            "• 广播给管理员 - 仅向管理员发送消息",
+            reply_markup=get_broadcast_keyboard(),
+            parse_mode="Markdown"
+        )
+        return
+
+    if data == "broadcast_all" and is_admin_user:
+        context.user_data['awaiting_broadcast'] = True
+        context.user_data['broadcast_type'] = "all"
+        await query.edit_message_text(
+            "📢 *发送广播给所有用户*\n\n"
+            "请发送要广播的消息内容：\n\n"
+            "支持Markdown格式\n"
+            "发送 /cancel 取消",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 返回", callback_data="broadcast_menu")]
+            ]),
+            parse_mode="Markdown"
+        )
+        return
+
+    if data == "broadcast_admins" and is_admin_user:
+        context.user_data['awaiting_broadcast'] = True
+        context.user_data['broadcast_type'] = "admins"
+        await query.edit_message_text(
+            "📢 *发送广播给管理员*\n\n"
+            "请发送要广播的消息内容：\n\n"
+            "发送 /cancel 取消",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 返回", callback_data="broadcast_menu")]
+            ]),
             parse_mode="Markdown"
         )
         return
@@ -1043,7 +1143,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    # ========== 添加商品（管理员） ==========
+    # ========== 添加商品 ==========
     if data.startswith("add_product_to_"):
         cat_id = data[len("add_product_to_"):]
 
@@ -1520,7 +1620,17 @@ async def post_init(application: Application) -> None:
     if job_queue:
         job_queue.run_repeating(check_pending_recharges, interval=30, first=10)
     else:
-        logger.warning("⚠️ JobQueue 未安装，自动到账检查不可用。请安装: pip install python-telegram-bot[job-queue]")
+        logger.warning("⚠️ JobQueue 未安装，自动到账检查不可用。")
+    
+    await broadcast_to_admins(
+        application.bot,
+        f"🤖 *机器人已启动*\n\n"
+        f"📅 时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"👥 管理员数量: {len(ADMIN_USER_IDS)}\n"
+        f"👤 管理员列表: {ADMIN_USER_IDS}\n"
+        f"📊 当前用户数: {len(user_balances)}\n"
+        f"📦 商品数: {len(products)}"
+    )
 
 def main() -> None:
     application = Application.builder().token(TOKEN).post_init(post_init).build()
@@ -1533,15 +1643,13 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_all_messages))
 
     print("🤖 自助购买机器人已启动！")
+    print(f"👥 管理员配置:")
+    print(f"   👤 管理员列表: {ADMIN_USER_IDS}")
     print(f"📂 固定分类：{list(FIXED_CATEGORIES.values())}")
     print(f"📦 商品数量：{len(products)}")
     print(f"👥 用户数量：{len(user_balances)}")
     print(f"📦 订单数量：{len(orders)}")
-    print("💎 OkayPay API 已集成")
-    print("🔒 已启用并发安全锁")
-    print("✨ Markdown 转义已启用")
-    print("📁 分类管理已完善")
-    print("🎉 每次 /start 都会发送完整欢迎消息")
+    print("📢 广播功能已启用 - 所有管理员都能看到广播按钮")
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
