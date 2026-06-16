@@ -51,19 +51,19 @@ RECHARGE_ORDERS_FILE = "recharge_orders.json"
 
 # ================== 固定分类 ==================
 FIXED_CATEGORIES = {
-    "cat_baozihao": "🐆 各国豹子号",
-    "cat_huanbang": "🔄 各国换绑注册",
-    "cat_jiechi": "🎯 各国劫持账号",
-    "cat_shuangxiang": "📞 各国双向账号"
+    "cat_baozihao": " 各国豹子号",
+    "cat_huanbang": " 各国换绑注册",
+    "cat_jiechi": " 各国劫持账号",
+    "cat_shuangxiang": " 各国双向账号"
 }
 
 MENU_BUTTONS = [
-    "📦 自助购买",
-    "💰 我的余额",
-    "💎 充值余额",
-    "📋 购买记录",
-    "📞 联系客服",
-    "⚙️ 管理面板"
+    " 自助购买",
+    " 我的余额",
+    " 充值余额",
+    " 购买记录",
+    " 联系客服",
+    " 管理面板"
 ]
 
 logging.basicConfig(
@@ -334,9 +334,9 @@ async def get_shop_name(context: ContextTypes.DEFAULT_TYPE) -> str:
     try:
         first_admin = await context.bot.get_chat(ADMIN_USER_IDS[0])
         admin_name = first_admin.full_name or first_admin.username or "管理员"
-        return f"🎫 {escape_markdown(admin_name)}の自助卖号"
+        return f" {escape_markdown(admin_name)}の自助卖号"
     except:
-        return "🎫 自助卖号机器人"
+        return " 自助卖号机器人"
 
 # ================== 欢迎消息 ==================
 def get_welcome_message(admin_name: str) -> str:
@@ -361,24 +361,24 @@ def get_welcome_message(admin_name: str) -> str:
 # ================== 键盘构建 ==================
 async def get_main_menu_keyboard(context: ContextTypes.DEFAULT_TYPE, is_admin_user: bool = False) -> InlineKeyboardMarkup:
     buttons = [
-        [InlineKeyboardButton("📦 自助购买", callback_data="product_list")],
-        [InlineKeyboardButton("💰 我的余额", callback_data="my_balance")],
-        [InlineKeyboardButton("💎 充值余额", callback_data="recharge_balance")],
-        [InlineKeyboardButton("📋 购买记录", callback_data="my_orders")],
-        [InlineKeyboardButton("👤 联系客服", callback_data="contact_admin")],
+        [InlineKeyboardButton(" 自助购买", callback_data="product_list")],
+        [InlineKeyboardButton(" 我的余额", callback_data="my_balance")],
+        [InlineKeyboardButton(" 充值余额", callback_data="recharge_balance")],
+        [InlineKeyboardButton(" 购买记录", callback_data="my_orders")],
+        [InlineKeyboardButton(" 联系客服", callback_data="contact_admin")],
     ]
     if is_admin_user:
-        buttons.append([InlineKeyboardButton("⚙️ 管理面板", callback_data="admin_panel")])
+        buttons.append([InlineKeyboardButton(" 管理面板", callback_data="admin_panel")])
     return InlineKeyboardMarkup(buttons)
 
 def get_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     buttons = [
-        [KeyboardButton("📦 自助购买"), KeyboardButton("💰 我的余额")],
-        [KeyboardButton("💎 充值余额"), KeyboardButton("📋 购买记录")],
-        [KeyboardButton("📞 联系客服")]
+        [KeyboardButton(" 自助购买"), KeyboardButton(" 我的余额")],
+        [KeyboardButton(" 充值余额"), KeyboardButton(" 购买记录")],
+        [KeyboardButton(" 联系客服")]
     ]
     if is_admin:
-        buttons.append([KeyboardButton("⚙️ 管理面板")])
+        buttons.append([KeyboardButton(" 管理面板")])
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
 def get_product_categories_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
@@ -394,11 +394,11 @@ def get_product_categories_keyboard(is_admin: bool = False) -> InlineKeyboardMar
         
         if is_admin:
             buttons.append([
-                InlineKeyboardButton(f"📁 {cat_name}{stock_text}", callback_data=f"cat_{cat_id}"),
+                InlineKeyboardButton(f" {cat_name}{stock_text}", callback_data=f"cat_{cat_id}"),
                 InlineKeyboardButton("➕", callback_data="add_category")
             ])
         else:
-            buttons.append([InlineKeyboardButton(f"📁 {cat_name}{stock_text}", callback_data=f"cat_{cat_id}")])
+            buttons.append([InlineKeyboardButton(f"😄 {cat_name}{stock_text}", callback_data=f"cat_{cat_id}")])
 
     if is_admin:
         buttons.append([InlineKeyboardButton("📁 管理分类", callback_data="manage_categories")])
