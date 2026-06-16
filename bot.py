@@ -44,7 +44,7 @@ CATEGORIES_FILE = "categories.json"
 SENT_WELCOME_FILE = "sent_welcome.json"
 RECHARGE_ORDERS_FILE = "recharge_orders.json"
 
-# ================== 固定分类（ID不带cat_前缀） ==================
+# ================== 固定分类 ==================
 FIXED_CATEGORIES = {
     "baozihao": "📱 各国豹子号",
     "huanbang": "🔄 各国换绑注册",
@@ -60,13 +60,7 @@ MENU_BUTTONS = [
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ================== 修复1：全部使用可重入锁 ==================
-card_lock = threading.RLock()
-balance_lock = threading.RLock()
-recharge_lock = threading.RLock()
-data_lock = threading.RLock()
-
-# ================== OkayPay API（同步版本，用于非异步场景） ==================
+# ================== OkayPay API ==================
 def _sign(data: dict) -> dict:
     data['id'] = shop_id
     data = {k: v for k, v in data.items() if v or v == 0}
@@ -77,7 +71,6 @@ def _sign(data: dict) -> dict:
     return data
 
 async def _post_async(endpoint: str, data: dict) -> dict:
-    """异步HTTP请求"""
     data = _sign(data)
     try:
         async with aiohttp.ClientSession() as session:
@@ -88,7 +81,6 @@ async def _post_async(endpoint: str, data: dict) -> dict:
         return {'code': -1, 'msg': str(e)}
 
 def _post_sync(endpoint: str, data: dict) -> dict:
-    """同步HTTP请求（仅在非异步上下文中使用）"""
     data = _sign(data)
     try:
         resp = requests.post(API_URL + endpoint, data=data, timeout=15)
@@ -114,7 +106,6 @@ async def okpay_balance() -> dict:
 
 # ================== 转义函数 ==================
 def escape_html(text: str) -> str:
-    """HTML转义，用于安全发送卡密"""
     if not text:
         return ""
     return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
@@ -172,6 +163,12 @@ save_json(CATEGORIES_FILE, categories)
 sent_welcome: Dict[str, bool] = load_json(SENT_WELCOME_FILE, {})
 recharge_orders: Dict[str, Dict] = load_json(RECHARGE_ORDERS_FILE, {})
 
+# ================== 全局锁（全部使用可重入锁） ==================
+card_lock = threading.RLock()
+balance_lock = threading.RLock()
+recharge_lock = threading.RLock()
+data_lock = threading.RLock()
+
 def save_all_data() -> None:
     with data_lock:
         save_json(BALANCE_FILE, user_balances)
@@ -196,9 +193,9 @@ async def broadcast_to_admins(context: ContextTypes.DEFAULT_TYPE, message: str, 
 async def broadcast_to_all_users(context: ContextTypes.DEFAULT_TYPE, message: str, parse_mode: str = "Markdown") -> None:
     success_count = 0
     fail_count = 0
-    for user_id in list(user_balances.keys()):
+    for uid in list(user_balances.keys()):
         try:
-            await context.bot.send_message(chat_id=int(user_id), text=message, parse_mode=parse_mode)
+            await context.bot.send_message(chat_id=int(uid), text=message, parse_mode=parse_mode)
             success_count += 1
             await asyncio.sleep(0.05)
         except Exception as e:
@@ -206,18 +203,15 @@ async def broadcast_to_all_users(context: ContextTypes.DEFAULT_TYPE, message: st
     return success_count, fail_count
 
 def get_product_stock_nolock(product_key: str) -> int:
-    """内部使用：不加锁的库存查询（调用者必须已持有card_lock）"""
     if product_key not in cards:
         return 0
     return len([c for c in cards[product_key] if not c.get('used', False)])
 
 def get_product_stock(product_key: str) -> int:
-    """公开使用：加锁的库存查询"""
     with card_lock:
         return get_product_stock_nolock(product_key)
 
 def get_available_card_nolock(product_key: str) -> Optional[str]:
-    """内部使用：不加锁的取卡（调用者必须已持有card_lock）"""
     if product_key not in cards:
         return None
     for i, card_info in enumerate(cards[product_key]):
@@ -227,18 +221,14 @@ def get_available_card_nolock(product_key: str) -> Optional[str]:
     return None
 
 def get_available_card(product_key: str) -> Optional[str]:
-    """公开使用：加锁的取卡"""
     with card_lock:
         return get_available_card_nolock(product_key)
 
 def add_cards_bulk(product_key: str, card_list: List[str]) -> int:
-    """批量添加卡密 - 去重"""
     with card_lock:
         if product_key not in cards:
             cards[product_key] = []
-        
         existing_cards: Set[str] = {c.get("card", "") for c in cards[product_key]}
-        
         added = 0
         for card in card_list:
             card = card.strip()
@@ -267,7 +257,6 @@ def create_order(user_id: str, product_key: str, product_name: str, price: float
     return order_id
 
 def create_recharge_order(user_id: str, amount: float) -> str:
-    """创建充值订单 - 使用UUID避免重复"""
     order_id = f"R{uuid4().hex[:12]}"
     recharge_orders[order_id] = {
         "user_id": user_id,
@@ -279,7 +268,6 @@ def create_recharge_order(user_id: str, amount: float) -> str:
     return order_id
 
 def confirm_recharge(order_id: str, tx_id: str = None) -> bool:
-    """确认充值 - 加锁防止重复到账"""
     with recharge_lock:
         if order_id not in recharge_orders:
             return False
@@ -299,8 +287,8 @@ def confirm_recharge(order_id: str, tx_id: str = None) -> bool:
         return True
 
 async def check_pending_recharges(context: ContextTypes.DEFAULT_TYPE) -> None:
-    pending_orders = [(oid, o) for oid, o in recharge_orders.items() if o.get("status") == "pending"]
-    for order_id, order in pending_orders:
+    pending = [(oid, o) for oid, o in recharge_orders.items() if o.get("status") == "pending"]
+    for order_id, order in pending:
         result = await okpay_check_deposit(order_id)
         if result.get('code') == 200:
             data = result.get('data', {})
@@ -326,8 +314,8 @@ async def get_shop_name(context: ContextTypes.DEFAULT_TYPE) -> str:
 # ================== 欢迎消息 ==================
 def get_welcome_message(admin_name: str) -> str:
     return (
-        f"🌈 欢迎光临 {admin_name} 自助卖号机器人\n\n"
-        "✅ TG账号自助购买\n\n"
+        f"🌈欢迎光临{admin_name}自助卖号机器人 \n\n"
+        "✅TG账号自助购买 \n\n"
         "1、请先少量购买测试，合适可继续购买\n\n"
         "2、购买后第一时间检测是否死号，如帐号有问题请十分钟内联系我处理，包售后，超时不售后\n\n"
         "3、群发群、拉人还是私信都有技巧，不能盲目，可以进群交流\n"
@@ -368,9 +356,11 @@ def get_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
 def get_product_categories_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
     buttons = []
     for cat_id, cat_name in categories.items():
-        total_stock = sum(get_product_stock(key) for key, prod in products.items() if prod.get('category_id', '') == cat_id)
+        total_stock = 0
+        for key, prod in products.items():
+            if prod.get('category_id', '') == cat_id:
+                total_stock += get_product_stock(key)
         stock_text = f" (库存:{total_stock})" if total_stock > 0 else ""
-        
         if is_admin:
             buttons.append([
                 InlineKeyboardButton(f"📁 {cat_name}{stock_text}", callback_data=f"cat_{cat_id}"),
@@ -378,7 +368,6 @@ def get_product_categories_keyboard(is_admin: bool = False) -> InlineKeyboardMar
             ])
         else:
             buttons.append([InlineKeyboardButton(f"📁 {cat_name}{stock_text}", callback_data=f"cat_{cat_id}")])
-
     if is_admin:
         buttons.append([InlineKeyboardButton("📂 管理分类", callback_data="manage_categories")])
     buttons.append([InlineKeyboardButton("🏠 主菜单", callback_data="main_menu")])
@@ -405,13 +394,10 @@ def get_products_by_category(category_id: str, is_admin: bool = False) -> Inline
                         f"❌ {prod.get('name', '未知')} - 已售罄",
                         callback_data="noop"
                     )])
-
     if is_admin:
         buttons.append([InlineKeyboardButton("➕ 添加商品到此分类", callback_data=f"add_product_to_{category_id}")])
-    
     if not buttons:
         buttons.append([InlineKeyboardButton("📁 暂无商品", callback_data="noop")])
-
     buttons.append([InlineKeyboardButton("🔙 返回分类列表", callback_data="product_list")])
     return InlineKeyboardMarkup(buttons)
 
@@ -479,15 +465,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         save_all_data()
         await broadcast_to_admins(
             context,
-            f"🆕 *新用户加入*\n\n👤 用户ID: `{user_id}`\n👤 用户名: @{update.effective_user.username or '无'}\n📅 时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"🆕 *新用户加入*\n\n"
+            f"👤 用户ID: `{user_id}`\n"
+            f"👤 用户名: @{update.effective_user.username or '无'}\n"
+            f"📅 时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
-        
         try:
             first_admin = await context.bot.get_chat(ADMIN_USER_IDS[0])
             admin_name = first_admin.full_name or first_admin.username or "管理员"
         except:
             admin_name = "管理员"
-        
         welcome_text = get_welcome_message(admin_name)
         await update.message.reply_text(welcome_text)
 
@@ -496,10 +483,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reply_keyboard = get_main_reply_keyboard(is_admin_user)
     await update.message.reply_text(balance_text, reply_markup=reply_keyboard, parse_mode="Markdown")
 
-async def refresh_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_admin(update.effective_user.id):
-        return
+async def refresh_data_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global products, cards, categories, user_balances, orders, recharge_orders
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ 权限不足")
+        return
     with data_lock:
         products = load_json(PRODUCTS_FILE, {})
         cards = load_json(CARD_FILE, {})
@@ -512,55 +500,83 @@ async def refresh_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         save_json(CATEGORIES_FILE, categories)
     await update.message.reply_text(f"✅ 数据已刷新！\n\n📦 商品数：{len(products)}\n📂 分类数：{len(categories)}")
 
-async def fix_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def fix_data_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ 权限不足")
         return
+    fixed = 0
     with data_lock:
-        for product_key in list(cards.keys()):
-            if product_key not in products:
-                del cards[product_key]
+        for pk in list(cards.keys()):
+            if pk not in products:
+                del cards[pk]
+                fixed += 1
         save_json(CARD_FILE, cards)
-    await update.message.reply_text("✅ 数据修复完成！")
+    await update.message.reply_text(f"✅ 修复完成！删除 {fixed} 个孤立卡片\n📦 有效商品：{len(products)}")
 
 async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = str(update.effective_user.id)
     text = update.message.text
     is_admin_user = is_admin(update.effective_user.id)
 
-    # 管理员编辑分类名称
+    # ========== 管理员编辑分类名称 ==========
     if context.user_data.get('editing_category') and is_admin_user:
         new_name = text.strip()
         old_cat_id = context.user_data.get('editing_category_old')
-        if new_name and old_cat_id in categories:
+        if not new_name:
+            await update.message.reply_text("❌ 分类名不能为空！")
+            return
+        if old_cat_id in categories:
             categories[old_cat_id] = new_name
             save_all_data()
-            await update.message.reply_text(f"✅ 分类已重命名：{new_name}")
+            await update.message.reply_text(
+                f"✅ 分类已重命名：{new_name}",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📂 管理分类", callback_data="manage_categories")],
+                    [InlineKeyboardButton("🔙 管理面板", callback_data="admin_panel")]
+                ])
+            )
+        else:
+            await update.message.reply_text("❌ 分类不存在！")
         context.user_data.pop('editing_category', None)
         context.user_data.pop('editing_category_old', None)
         return
 
-    # 管理员添加分类
+    # ========== 管理员添加分类 ==========
     if context.user_data.get('adding_category') and is_admin_user:
         new_name = text.strip()
-        if new_name:
-            cat_id = uuid4().hex[:8]
-            categories[cat_id] = new_name
-            save_all_data()
-            await update.message.reply_text(f"✅ 已添加新分类：{new_name}\n\n📂 当前共有 {len(categories)} 个分类")
+        if not new_name:
+            await update.message.reply_text("❌ 分类名不能为空！")
+            return
+        cat_id = uuid4().hex[:8]
+        if cat_id in categories:
+            await update.message.reply_text("❌ 分类ID冲突，请重试")
+            return
+        categories[cat_id] = new_name
+        save_all_data()
+        await update.message.reply_text(
+            f"✅ 已添加新分类：{new_name}\n\n📂 当前共有 {len(categories)} 个分类",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📂 管理分类", callback_data="manage_categories")],
+                [InlineKeyboardButton("🔙 管理面板", callback_data="admin_panel")]
+            ])
+        )
         context.user_data.pop('adding_category', None)
         return
 
-    # 管理员添加商品信息
+    # ========== 管理员添加商品信息 ==========
     if context.user_data.get('awaiting_product_info') and is_admin_user:
         category_id = context.user_data.get('adding_product_category')
         if not category_id or category_id not in categories:
+            await update.message.reply_text("❌ 无效的分类！")
             context.user_data.clear()
             return
 
-        # 修复：最多拆两次，防止描述中的|被误拆
         parts = text.split("|", 2)
         if len(parts) < 2:
-            await update.message.reply_text("❌ 格式错误！\n\n格式：`商品名称 | 价格 | 商品描述`", parse_mode="Markdown")
+            await update.message.reply_text(
+                "❌ 格式错误！\n\n请使用格式：`商品名称 | 价格 | 商品描述`\n\n示例：`美国老号 | 0.8 | 2018年注册带好友`",
+                parse_mode="Markdown"
+            )
             return
 
         product_name = parts[0].strip()
@@ -569,6 +585,7 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         except:
             await update.message.reply_text("❌ 价格必须是数字！")
             return
+
         product_desc = parts[2].strip() if len(parts) >= 3 else "无"
         product_key = uuid4().hex[:12]
 
@@ -584,14 +601,26 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         context.user_data['awaiting_product_info'] = False
         context.user_data['awaiting_stock'] = product_key
-        await update.message.reply_text(f"✅ 商品已创建！\n\n📦 {product_name}\n💰 {product_price} USDT\n\n📤 请发送卡密内容（每行一个），或发送「跳过」稍后添加\n也可以直接发送 .txt 文件")
+
+        category_name = categories.get(category_id, "未知")
+        await update.message.reply_text(
+            f"✅ 商品已创建！\n\n"
+            f"📦 {escape_markdown(product_name)}\n"
+            f"💰 {product_price} USDT\n"
+            f"📁 {escape_markdown(category_name)}\n"
+            f"📝 {escape_markdown(product_desc)}\n\n"
+            f"📤 请发送卡密内容（每行一个卡密），或发送「跳过」稍后添加：\n\n"
+            f"也可以直接发送 .txt 文件",
+            parse_mode="Markdown"
+        )
         return
 
-    # 管理员添加卡密
+    # ========== 管理员添加卡密 ==========
     if context.user_data.get('awaiting_stock') and is_admin_user:
         product_key = context.user_data['awaiting_stock']
         prod = safe_product_get(product_key)
         if not prod:
+            await update.message.reply_text("❌ 商品不存在，请重新操作")
             context.user_data.pop('awaiting_stock', None)
             return
 
@@ -599,15 +628,27 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
             lines = [line.strip() for line in text.split('\n') if line.strip() and line.strip() not in MENU_BUTTONS]
             added = add_cards_bulk(product_key, lines)
             current_stock = get_product_stock(product_key)
+
             category_id = prod.get('category_id', '')
-            reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回商品分类", callback_data=f"cat_{category_id}")]]) if category_id else None
-            await update.message.reply_text(f"✅ 已添加 {added} 个卡密\n\n📊 当前库存：{current_stock} 个\n\n商品已上架成功！", reply_markup=reply_markup)
+            reply_markup = None
+            if category_id:
+                reply_markup = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 返回商品分类", callback_data=f"cat_{category_id}")
+                ]])
+
+            await update.message.reply_text(
+                f"✅ 已添加 {added} 个卡密\n\n"
+                f"📊 当前库存：{current_stock} 个\n\n"
+                f"商品已上架成功！",
+                reply_markup=reply_markup
+            )
         else:
-            await update.message.reply_text("⚠️ 已跳过添加卡密，库存为0")
+            await update.message.reply_text("⚠️ 已跳过添加卡密，库存为0\n\n后续可通过商品管理添加卡密。")
+
         context.user_data.pop('awaiting_stock', None)
         return
 
-    # 用户自定义充值
+    # ========== 用户自定义充值 ==========
     if context.user_data.get('awaiting_recharge'):
         try:
             amount = float(text)
@@ -615,87 +656,133 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await update.message.reply_text("❌ 金额不能小于 1 USDT")
                 return
             order_number = create_recharge_order(user_id, amount)
-            recharge_orders[order_number] = {"user_id": user_id, "amount": amount, "status": "pending", "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-            save_all_data()
             result = await okpay_create_deposit(order_number, amount, user_id)
             if result.get('code') == 200:
                 pay_url = result.get('data', {}).get('pay_url', '')
-                await update.message.reply_text(f"💳 *充值订单*\n\n金额：{amount} USDT\n订单号：`{order_number}`\n\n[点击支付]({pay_url})\n\n支付后自动到账。", parse_mode="Markdown", disable_web_page_preview=True)
+                await update.message.reply_text(
+                    f"💳 *充值订单*\n\n"
+                    f"金额：{amount} USDT\n"
+                    f"订单号：`{order_number}`\n\n"
+                    f"[点击支付]({pay_url})\n\n"
+                    f"支付后自动到账。",
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True
+                )
             else:
                 await update.message.reply_text(f"❌ 创建失败：{result.get('msg')}")
             context.user_data.pop('awaiting_recharge', None)
-        except:
+        except ValueError:
             await update.message.reply_text("❌ 请输入数字金额")
         return
 
-    # 管理员修改价格
+    # ========== 管理员修改价格 ==========
     if context.user_data.get('changing_price') and is_admin_user:
         product_key = context.user_data['changing_price']
         prod = safe_product_get(product_key)
-        if prod:
-            try:
-                new_price = float(text)
-                prod['price_usdt'] = new_price
-                save_all_data()
-                await update.message.reply_text(f"✅ 价格已修改为 {new_price} USDT")
-            except:
-                await update.message.reply_text("❌ 价格格式错误")
+        if not prod:
+            await update.message.reply_text("❌ 商品不存在")
+            context.user_data.pop('changing_price', None)
+            return
+        try:
+            new_price = float(text)
+            prod['price_usdt'] = new_price
+            save_all_data()
+            await update.message.reply_text(f"✅ 价格已修改为 {new_price} USDT")
+        except ValueError:
+            await update.message.reply_text("❌ 价格格式错误")
         context.user_data.pop('changing_price', None)
         return
 
-    # 管理员修改描述
+    # ========== 管理员修改描述 ==========
     if context.user_data.get('changing_desc') and is_admin_user:
         product_key = context.user_data['changing_desc']
         prod = safe_product_get(product_key)
-        if prod:
-            prod['description'] = text
-            save_all_data()
-            await update.message.reply_text("✅ 描述已修改")
+        if not prod:
+            await update.message.reply_text("❌ 商品不存在")
+            context.user_data.pop('changing_desc', None)
+            return
+        prod['description'] = text
+        save_all_data()
+        await update.message.reply_text("✅ 描述已修改")
         context.user_data.pop('changing_desc', None)
         return
 
-    # 管理员重命名
+    # ========== 管理员重命名商品 ==========
     if context.user_data.get('renaming_product') and is_admin_user:
         product_key = context.user_data['renaming_product']
         prod = safe_product_get(product_key)
-        if prod and text.strip():
-            prod['name'] = text.strip()
+        if not prod:
+            await update.message.reply_text("❌ 商品不存在")
+            context.user_data.pop('renaming_product', None)
+            return
+        new_name = text.strip()
+        if new_name:
+            old_name = prod['name']
+            prod['name'] = new_name
             save_all_data()
-            await update.message.reply_text(f"✅ 商品已重命名")
+            await update.message.reply_text(
+                f"✅ 商品已重命名：\n{escape_markdown(old_name)} → {escape_markdown(new_name)}",
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text("❌ 名称不能为空")
         context.user_data.pop('renaming_product', None)
         return
 
-    # 管理员广播
+    # ========== 管理员广播消息 ==========
     if context.user_data.get('awaiting_broadcast') and is_admin_user:
         broadcast_type = context.user_data.get('broadcast_type')
+        message = text
         if broadcast_type == "all":
-            success, fail = await broadcast_to_all_users(context, text)
-            await update.message.reply_text(f"📢 *广播完成*\n\n✅ 成功: {success} 人\n❌ 失败: {fail} 人", parse_mode="Markdown")
+            success, fail = await broadcast_to_all_users(context, message)
+            result_msg = f"📢 *广播完成*\n\n✅ 成功发送: {success} 人\n❌ 失败: {fail} 人"
+            await broadcast_to_admins(context, result_msg)
+            await update.message.reply_text(result_msg, parse_mode="Markdown")
         elif broadcast_type == "admins":
-            await broadcast_to_admins(context, text)
-            await update.message.reply_text("✅ 已向管理员发送广播")
+            await broadcast_to_admins(context, message)
+            await update.message.reply_text("✅ 已向所有管理员发送广播", parse_mode="Markdown")
         context.user_data.pop('awaiting_broadcast', None)
         context.user_data.pop('broadcast_type', None)
         return
 
-    # 底部菜单按钮
+    # ========== 底部菜单按钮 ==========
     if text == "📦 自助购买":
-        await update.message.reply_text("📂 *商品分类*\n\n🛒选择你需要的商品", reply_markup=get_product_categories_keyboard(is_admin_user), parse_mode="Markdown")
+        await update.message.reply_text(
+            "📂 *商品分类*\n\n"
+            "🛒选择你需要的商品:✅未购买过本店商品的，请先少量购买测试，以免产生纠纷！谢谢合作‼️",
+            reply_markup=get_product_categories_keyboard(is_admin_user),
+            parse_mode="Markdown"
+        )
     elif text == "💰 我的余额":
-        await update.message.reply_text(f"💰 *我的余额*\n\n`{user_balances.get(user_id, 0):.4f} USDT`", parse_mode="Markdown")
+        balance = user_balances.get(user_id, 0.0)
+        await update.message.reply_text(f"💰 *我的余额*\n\n`{balance:.4f} USDT`", parse_mode="Markdown")
     elif text == "💎 充值余额":
-        await update.message.reply_text("💎 *充值中心*\n\n请选择充值金额", reply_markup=get_recharge_keyboard(), parse_mode="Markdown")
+        await update.message.reply_text(
+            "💎 *充值中心*\n\n有钱人请适当充值余额目前仅对接okpay支付",
+            reply_markup=get_recharge_keyboard(),
+            parse_mode="Markdown"
+        )
     elif text == "📋 购买记录":
-        user_orders = [f"`{oid}` - {escape_markdown(o.get('product_name', '未知'))} - {o.get('price_usdt', 0)} USDT" for oid, o in orders.items() if o.get('user_id') == user_id]
+        user_orders = []
+        for oid, o in orders.items():
+            if o.get('user_id') == user_id:
+                safe_name = escape_markdown(o.get('product_name', '未知'))
+                user_orders.append(f"`{oid}` - {safe_name} - {o.get('price_usdt', 0)} USDT")
         text_msg = "📋 *购买记录*\n\n" + "\n".join(user_orders[-10:]) if user_orders else "📋 暂无购买记录"
         await update.message.reply_text(text_msg, parse_mode="Markdown")
     elif text == "📞 联系客服":
         await update.message.reply_text("👤 *联系客服*\n\n@apl520", parse_mode="Markdown")
     elif text == "⚙️ 管理面板" and is_admin_user:
-        await update.message.reply_text("⚙️ *管理员面板*", reply_markup=get_admin_panel_keyboard(), parse_mode="Markdown")
+        await update.message.reply_text(
+            "⚙️ *管理员面板*\n\n尊敬的管理员请进行操作",
+            reply_markup=get_admin_panel_keyboard(),
+            parse_mode="Markdown"
+        )
 
 # ================== 按钮回调处理 ==================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global products, cards, categories, user_balances, orders, recharge_orders
+
     query = update.callback_query
     await query.answer()
     data = query.data
@@ -706,21 +793,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if data == "noop":
         return
     if data == "main_menu":
-        await query.edit_message_text("🏠 *主菜单*", reply_markup=await get_main_menu_keyboard(context, is_admin_user), parse_mode="Markdown")
+        keyboard = await get_main_menu_keyboard(context, is_admin_user)
+        await query.edit_message_text("🏠 *主菜单*", reply_markup=keyboard, parse_mode="Markdown")
         return
 
     # ========== 用户功能 ==========
     if data == "product_list":
-        await query.edit_message_text("📂 *商品分类*\n\n🛒选择你需要的商品", reply_markup=get_product_categories_keyboard(is_admin_user), parse_mode="Markdown")
+        await query.edit_message_text(
+            "📂 *商品分类*\n\n"
+            "🛒选择你需要的商品:✅未购买过本店商品的，请先少量购买测试，以免产生纠纷！谢谢合作‼️",
+            reply_markup=get_product_categories_keyboard(is_admin_user),
+            parse_mode="Markdown"
+        )
         return
 
     if data.startswith("cat_"):
         cat_id = data[4:]
         cat_name = categories.get(cat_id, "未知分类")
-        await query.edit_message_text(f"📁 *{escape_markdown(cat_name)}*", reply_markup=get_products_by_category(cat_id, is_admin_user), parse_mode="Markdown")
+        await query.edit_message_text(
+            f"📁 *{escape_markdown(cat_name)}*\n\n"
+            f"✅未购买过本店商品的，请先少量购买测试，以免产生纠纷！谢谢合作",
+            reply_markup=get_products_by_category(cat_id, is_admin_user),
+            parse_mode="Markdown"
+        )
         return
 
-    # 查看商品详情
     if data.startswith("vp_"):
         product_key = data[3:]
         prod = safe_product_get(product_key)
@@ -729,39 +826,92 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
         stock = get_product_stock(product_key)
         category_id = prod.get('category_id', '')
+        cat_name = categories.get(category_id, "未知")
+        safe_name = escape_markdown(prod.get('name', '未知'))
+        safe_desc = escape_markdown(prod.get('description', '无'))
+
         if stock <= 0:
-            await query.edit_message_text(f"❌ *{escape_markdown(prod.get('name', '未知'))}* 已售罄！", parse_mode="Markdown")
+            await query.edit_message_text(
+                f"❌ *{safe_name}* 已售罄！",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 返回商品列表", callback_data=f"bc_{category_id}")
+                ]]),
+                parse_mode="Markdown"
+            )
             return
-        detail = f"📦 *{escape_markdown(prod.get('name', '未知'))}*\n\n💰 价格：`{prod.get('price_usdt', 0)} USDT`\n📊 库存：`{stock}` 个\n📝 {escape_markdown(prod.get('description', '无'))}"
-        await query.edit_message_text(detail, reply_markup=get_product_detail_keyboard(product_key, category_id), parse_mode="Markdown")
+
+        detail_text = (
+            f"📦 *{safe_name}*\n\n"
+            f"💰 价格：`{prod.get('price_usdt', 0)} USDT`\n"
+            f"📊 库存：`{stock}` 个\n"
+            f"📁 分类：{escape_markdown(cat_name)}\n"
+            f"📝 商品描述：\n{safe_desc}\n\n"
+            f"⚡ 点击「立即购买」将使用余额直接购买"
+        )
+        await query.edit_message_text(
+            detail_text,
+            reply_markup=get_product_detail_keyboard(product_key, category_id),
+            parse_mode="Markdown"
+        )
         return
 
     if data == "my_balance":
-        await query.edit_message_text(f"💰 *我的余额*\n\n`{user_balances.get(user_id, 0):.4f} USDT`", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 充值", callback_data="recharge_balance"), InlineKeyboardButton("🔙 返回", callback_data="main_menu")]]), parse_mode="Markdown")
+        balance = user_balances.get(user_id, 0.0)
+        await query.edit_message_text(
+            f"💰 *我的余额*\n\n`{balance:.4f} USDT`",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💎 充值", callback_data="recharge_balance")],
+                [InlineKeyboardButton("🔙 返回", callback_data="main_menu")]
+            ]),
+            parse_mode="Markdown"
+        )
         return
 
     if data == "recharge_balance":
-        await query.edit_message_text("💎 *充值中心*\n\n请选择充值金额", reply_markup=get_recharge_keyboard(), parse_mode="Markdown")
+        await query.edit_message_text(
+            "💎 *充值中心*\n\n有钱人请适当充值余额目前仅对接okpay支付",
+            reply_markup=get_recharge_keyboard(),
+            parse_mode="Markdown"
+        )
         return
 
     if data == "my_orders":
-        user_orders = [f"`{oid}` - {escape_markdown(o.get('product_name', '未知'))} - {o.get('price_usdt', 0)} USDT" for oid, o in orders.items() if o.get('user_id') == user_id]
+        user_orders = []
+        for oid, o in orders.items():
+            if o.get('user_id') == user_id:
+                safe_name = escape_markdown(o.get('product_name', '未知'))
+                user_orders.append(f"`{oid}` - {safe_name} - {o.get('price_usdt', 0)} USDT")
         text = "📋 *购买记录*\n\n" + "\n".join(user_orders[-10:]) if user_orders else "📋 暂无购买记录"
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="main_menu")]]), parse_mode="Markdown")
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📦 继续购买", callback_data="product_list")],
+                [InlineKeyboardButton("🔙 返回", callback_data="main_menu")]
+            ]),
+            parse_mode="Markdown"
+        )
         return
 
     if data == "contact_admin":
-        await query.edit_message_text("👤 *联系客服*\n\n@apl520", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="main_menu")]]), parse_mode="Markdown")
+        await query.edit_message_text(
+            "👤 *联系客服*\n\n@apl520",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="main_menu")]]),
+            parse_mode="Markdown"
+        )
         return
 
-    # 返回商品分类
     if data.startswith("bc_"):
-        cat_id = data[3:]
-        cat_name = categories.get(cat_id, "未知分类")
-        await query.edit_message_text(f"📁 *{escape_markdown(cat_name)}*", reply_markup=get_products_by_category(cat_id, is_admin_user), parse_mode="Markdown")
+        category_id = data[3:]
+        cat_name = categories.get(category_id, "未知分类")
+        await query.edit_message_text(
+            f"📁 *{escape_markdown(cat_name)}*\n\n"
+            f"✅未购买过本店商品的，请先少量购买测试，以免产生纠纷！谢谢合作",
+            reply_markup=get_products_by_category(category_id, is_admin_user),
+            parse_mode="Markdown"
+        )
         return
 
-    # ========== 用户购买（修复死锁） ==========
+    # ========== 用户购买 ==========
     if data.startswith("buy_"):
         product_key = data[4:]
         prod = safe_product_get(product_key)
@@ -772,42 +922,50 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         price = prod.get("price_usdt", 0)
         category_id = prod.get('category_id', '')
 
-        # 使用可重入锁，不会死锁
         with card_lock:
-            # 直接调用_nolock版本，不重复加锁
             stock = get_product_stock_nolock(product_key)
-            
+
             if stock <= 0:
-                await query.edit_message_text(f"❌ *{escape_markdown(prod.get('name', '未知'))}* 已售罄！", parse_mode="Markdown")
+                await query.edit_message_text(
+                    f"❌ *{escape_markdown(prod.get('name', '未知'))}* 已售罄！",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🔙 返回商品列表", callback_data=f"bc_{category_id}")
+                    ]]),
+                    parse_mode="Markdown"
+                )
                 return
 
             with balance_lock:
                 balance = user_balances.get(user_id, 0.0)
                 if balance < price:
                     await query.edit_message_text(
-                        f"⚠️ *余额不足！*\n\n需要：`{price} USDT`\n当前：`{balance:.4f} USDT`",
+                        f"⚠️ *余额不足！*\n\n"
+                        f"需要：`{price} USDT`\n"
+                        f"当前：`{balance:.4f} USDT`\n\n"
+                        f"💎 请先充值",
                         reply_markup=InlineKeyboardMarkup([
                             [InlineKeyboardButton("💎 立即充值", callback_data="recharge_balance")],
-                            [InlineKeyboardButton("🔙 返回", callback_data=f"bc_{category_id}")]
+                            [InlineKeyboardButton("🔙 返回商品列表", callback_data=f"bc_{category_id}")]
                         ]),
                         parse_mode="Markdown"
                     )
                     return
 
-                # 取卡
                 delivery_data = get_available_card_nolock(product_key)
                 if not delivery_data:
-                    await query.edit_message_text("❌ 发货失败，请联系客服")
+                    await query.edit_message_text(
+                        "❌ 发货失败，请联系客服",
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("🔙 返回商品列表", callback_data=f"bc_{category_id}")
+                        ]])
+                    )
                     return
 
-                # 扣款
                 user_balances[user_id] = balance - price
                 save_all_data()
 
-        # 创建订单
         order_id = create_order(user_id, product_key, prod.get('name', '未知'), price, delivery_data)
 
-        # 使用HTML格式安全发送卡密
         purchase_html = (
             f"✅ <b>购买成功！</b>\n\n"
             f"📦 {escape_html(prod.get('name', '未知'))}\n"
@@ -817,7 +975,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"<code>{escape_html(delivery_data)}</code>\n\n"
             f"📋 订单号：<code>{order_id}</code>"
         )
-        
+
         try:
             await query.edit_message_text(
                 purchase_html,
@@ -829,9 +987,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 parse_mode=ParseMode.HTML
             )
         except Exception as e:
-            logger.error(f"发送卡密失败: {e}")
+            logger.error(f"发送卡密HTML失败: {e}")
             await query.edit_message_text(
-                "✅ 购买成功！\n\n卡密信息已生成\n\n请在购买记录中查看订单号：" + order_id,
+                f"✅ 购买成功！\n\n订单号：{order_id}\n\n请在购买记录中查看详情",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("📦 继续购买", callback_data="product_list")],
                     [InlineKeyboardButton("🏠 主菜单", callback_data="main_menu")]
@@ -847,7 +1005,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if result.get('code') == 200:
             pay_url = result.get('data', {}).get('pay_url', '')
             await query.edit_message_text(
-                f"💳 *充值订单*\n\n💰 {amount} USDT\n📦 订单号：`{order_number}`\n\n[点击支付]({pay_url})\n\n支付后自动到账。",
+                f"💳 *充值订单*\n\n"
+                f"💰 {amount} USDT\n"
+                f"📦 订单号：`{order_number}`\n\n"
+                f"[点击支付]({pay_url})\n\n"
+                f"支付后自动到账。",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("✅ 查询到账", callback_data=f"co_{order_number}")],
                     [InlineKeyboardButton("🔙 返回", callback_data="recharge_balance")]
@@ -871,6 +1033,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 主菜单", callback_data="main_menu")]]),
                         parse_mode="Markdown"
                     )
+                else:
+                    await query.edit_message_text("⚠️ 处理中，请稍后")
             else:
                 await query.edit_message_text(
                     f"⏳ *未支付*\n\n订单号：`{order_number}`",
@@ -880,11 +1044,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     ]),
                     parse_mode="Markdown"
                 )
+        else:
+            await query.edit_message_text("❌ 查询失败")
         return
 
     if data == "recharge_custom":
         context.user_data['awaiting_recharge'] = True
-        await query.edit_message_text("✏️ *自定义充值*\n\n请输入充值金额 (USDT)，最低 1 USDT：", parse_mode="Markdown")
+        await query.edit_message_text(
+            "✏️ *自定义充值*\n\n请输入充值金额 (USDT)，最低 1 USDT：",
+            parse_mode="Markdown"
+        )
         return
 
     # ========== 管理员功能 ==========
@@ -893,27 +1062,54 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if data == "admin_panel":
-        await query.edit_message_text("⚙️ *管理员面板*", reply_markup=get_admin_panel_keyboard(), parse_mode="Markdown")
+        await query.edit_message_text(
+            "⚙️ *管理员面板*\n\n尊敬的管理员请进行操作",
+            reply_markup=get_admin_panel_keyboard(),
+            parse_mode="Markdown"
+        )
         return
 
     if data == "broadcast_menu":
-        await query.edit_message_text("📢 *广播中心*", reply_markup=get_broadcast_keyboard(), parse_mode="Markdown")
+        await query.edit_message_text(
+            "📢 *广播中心*\n\n"
+            "请选择广播类型：\n\n"
+            "• 广播给所有用户 - 向所有注册用户发送消息\n"
+            "• 广播给管理员 - 仅向管理员发送消息",
+            reply_markup=get_broadcast_keyboard(),
+            parse_mode="Markdown"
+        )
         return
 
     if data == "broadcast_all":
         context.user_data['awaiting_broadcast'] = True
         context.user_data['broadcast_type'] = "all"
-        await query.edit_message_text("📢 *发送广播给所有用户*\n\n请发送消息内容\n发送 /cancel 取消", parse_mode="Markdown")
+        await query.edit_message_text(
+            "📢 *发送广播给所有用户*\n\n"
+            "请发送要广播的消息内容：\n\n"
+            "支持Markdown格式\n"
+            "发送 /cancel 取消",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 返回", callback_data="broadcast_menu")]
+            ]),
+            parse_mode="Markdown"
+        )
         return
 
     if data == "broadcast_admins":
         context.user_data['awaiting_broadcast'] = True
         context.user_data['broadcast_type'] = "admins"
-        await query.edit_message_text("📢 *发送广播给管理员*\n\n请发送消息内容\n发送 /cancel 取消", parse_mode="Markdown")
+        await query.edit_message_text(
+            "📢 *发送广播给管理员*\n\n"
+            "请发送要广播的消息内容：\n\n"
+            "发送 /cancel 取消",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 返回", callback_data="broadcast_menu")]
+            ]),
+            parse_mode="Markdown"
+        )
         return
 
     if data == "refresh_data":
-        global products, cards, categories, user_balances, orders, recharge_orders
         with data_lock:
             products = load_json(PRODUCTS_FILE, {})
             cards = load_json(CARD_FILE, {})
@@ -924,16 +1120,26 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             orders = load_json(ORDER_FILE)
             recharge_orders = load_json(RECHARGE_ORDERS_FILE)
             save_json(CATEGORIES_FILE, categories)
-        await query.edit_message_text(f"✅ 数据已刷新！\n\n📦 商品数：{len(products)}\n📂 分类数：{len(categories)}", reply_markup=get_admin_panel_keyboard())
+        await query.edit_message_text(
+            f"✅ 数据已刷新！\n\n📦 商品数：{len(products)}\n📂 分类数：{len(categories)}",
+            reply_markup=get_admin_panel_keyboard(),
+            parse_mode="Markdown"
+        )
         return
 
     if data == "fix_data":
+        fixed = 0
         with data_lock:
             for pk in list(cards.keys()):
                 if pk not in products:
                     del cards[pk]
+                    fixed += 1
             save_json(CARD_FILE, cards)
-        await query.edit_message_text("✅ 修复完成！", reply_markup=get_admin_panel_keyboard())
+        await query.edit_message_text(
+            f"✅ 修复完成！删除了 {fixed} 个孤立卡片",
+            reply_markup=get_admin_panel_keyboard(),
+            parse_mode="Markdown"
+        )
         return
 
     if data == "manage_categories":
@@ -942,7 +1148,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             prod_count = sum(1 for p in products.values() if p.get('category_id') == cat_id)
             total_stock = sum(get_product_stock(k) for k, p in products.items() if p.get('category_id') == cat_id)
             if cat_id in FIXED_CATEGORIES:
-                cat_buttons.append([InlineKeyboardButton(f"🔒 {cat_name} ({prod_count}商品,库存:{total_stock})", callback_data="noop")])
+                cat_buttons.append([
+                    InlineKeyboardButton(f"🔒 {cat_name} ({prod_count}商品,库存:{total_stock})", callback_data="noop")
+                ])
             else:
                 cat_buttons.append([
                     InlineKeyboardButton(f"📁 {cat_name} ({prod_count}商品,库存:{total_stock})", callback_data=f"ec_{cat_id}"),
@@ -950,12 +1158,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 ])
         cat_buttons.append([InlineKeyboardButton("➕ 添加新分类", callback_data="add_category")])
         cat_buttons.append([InlineKeyboardButton("🔙 返回管理面板", callback_data="admin_panel")])
-        await query.edit_message_text(f"📁 *分类管理*\n\n📊 总计：{len(categories)} 个分类", reply_markup=InlineKeyboardMarkup(cat_buttons), parse_mode="Markdown")
+        await query.edit_message_text(
+            "📁 *分类管理*\n\n"
+            "🔒 = 固定分类（不可删除）\n"
+            f"📊 总计：{len(categories)} 个分类\n\n"
+            "点击垃圾桶图标删除自定义分类",
+            reply_markup=InlineKeyboardMarkup(cat_buttons),
+            parse_mode="Markdown"
+        )
         return
 
     if data == "add_category":
         context.user_data['adding_category'] = True
-        await query.edit_message_text("➕ *添加新分类*\n\n请发送分类名称\n发送 /cancel 取消", parse_mode="Markdown")
+        await query.edit_message_text(
+            "➕ *添加新分类*\n\n"
+            "请发送分类名称（支持emoji）：\n\n"
+            "例如：`🐆 各国豹子号`\n\n"
+            "发送 /cancel 取消",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 返回分类管理", callback_data="manage_categories")]
+            ]),
+            parse_mode="Markdown"
+        )
         return
 
     if data.startswith("dc_"):
@@ -963,13 +1187,37 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if cat_id in FIXED_CATEGORIES:
             await query.answer("⚠️ 固定分类不可删除！", show_alert=True)
             return
-        if any(p.get('category_id') == cat_id for p in products.values()):
-            await query.answer("⚠️ 该分类下还有商品！", show_alert=True)
+        has_products = any(p.get('category_id') == cat_id for p in products.values())
+        if has_products:
+            await query.answer("⚠️ 该分类下还有商品，请先删除或移动商品！", show_alert=True)
             return
         if cat_id in categories:
+            cat_name = categories[cat_id]
             del categories[cat_id]
             save_all_data()
-            await query.answer("✅ 已删除分类", show_alert=True)
+            await query.answer(f"✅ 已删除分类「{cat_name}」", show_alert=True)
+            cat_buttons = []
+            for cid, cname in categories.items():
+                prod_count = sum(1 for p in products.values() if p.get('category_id') == cid)
+                total_stock = sum(get_product_stock(k) for k, p in products.items() if p.get('category_id') == cid)
+                if cid in FIXED_CATEGORIES:
+                    cat_buttons.append([
+                        InlineKeyboardButton(f"🔒 {cname} ({prod_count}商品,库存:{total_stock})", callback_data="noop")
+                    ])
+                else:
+                    cat_buttons.append([
+                        InlineKeyboardButton(f"📁 {cname} ({prod_count}商品,库存:{total_stock})", callback_data=f"ec_{cid}"),
+                        InlineKeyboardButton("🗑️", callback_data=f"dc_{cid}")
+                    ])
+            cat_buttons.append([InlineKeyboardButton("➕ 添加新分类", callback_data="add_category")])
+            cat_buttons.append([InlineKeyboardButton("🔙 返回管理面板", callback_data="admin_panel")])
+            await query.edit_message_text(
+                "📁 *分类管理*\n\n"
+                "🔒 = 固定分类（不可删除）\n"
+                f"📊 总计：{len(categories)} 个分类",
+                reply_markup=InlineKeyboardMarkup(cat_buttons),
+                parse_mode="Markdown"
+            )
         return
 
     if data.startswith("ec_"):
@@ -977,30 +1225,59 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if cat_id in FIXED_CATEGORIES:
             await query.answer("⚠️ 固定分类不可编辑！", show_alert=True)
             return
-        if cat_id in categories:
-            context.user_data['editing_category'] = True
-            context.user_data['editing_category_old'] = cat_id
-            await query.edit_message_text(f"✏️ *编辑分类*\n\n当前名称：{categories[cat_id]}\n\n请发送新名称：", parse_mode="Markdown")
+        if cat_id not in categories:
+            await query.answer("❌ 分类不存在！", show_alert=True)
+            return
+        context.user_data['editing_category'] = True
+        context.user_data['editing_category_old'] = cat_id
+        cat_name = categories.get(cat_id, "")
+        await query.edit_message_text(
+            f"✏️ *编辑分类*\n\n"
+            f"当前名称：{cat_name}\n\n"
+            f"请发送新的分类名称：",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 返回分类管理", callback_data="manage_categories")]
+            ]),
+            parse_mode="Markdown"
+        )
         return
 
     if data.startswith("add_product_to_"):
         cat_id = data[len("add_product_to_"):]
         if cat_id not in categories:
+            await query.edit_message_text("❌ 无效的分类！")
             return
         context.user_data['adding_product_category'] = cat_id
         context.user_data['awaiting_product_info'] = True
-        await query.edit_message_text("➕ *添加商品*\n\n格式：`商品名称 | 价格 | 商品描述`\n示例：`美国老号 | 0.8 | 2018年注册`", parse_mode="Markdown")
+        await query.edit_message_text(
+            "➕ *添加商品*\n\n"
+            "请一次性输入以下信息，用 | 分隔：\n\n"
+            "格式：`商品名称 | 价格 | 商品描述`\n\n"
+            "示例：`美国老号 | 0.8 | 2018年注册带好友`\n\n"
+            "发送后会自动创建商品并进入卡密添加页面。",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 取消", callback_data="product_list")]]),
+            parse_mode="Markdown"
+        )
         return
 
     if data.startswith("am_"):
         product_key = data[3:]
         prod = safe_product_get(product_key)
         if not prod:
+            await query.edit_message_text("❌ 商品不存在")
             return
         stock = get_product_stock(product_key)
         category_id = prod.get('category_id', '')
+        cat_name = categories.get(category_id, "未知")
+        safe_name = escape_markdown(prod.get('name', '未知'))
+        safe_desc = escape_markdown(prod.get('description', '无'))
         await query.edit_message_text(
-            f"📦 *{escape_markdown(prod.get('name', '未知'))}*\n\n💰 价格：`{prod.get('price_usdt', 0)} USDT`\n📊 库存：`{stock}`\n📁 分类：{categories.get(category_id, '未知')}\n\n👇 选择操作：",
+            f"📦 *{safe_name}*\n\n"
+            f"💰 价格：`{prod.get('price_usdt', 0)} USDT`\n"
+            f"📝 描述：{safe_desc}\n"
+            f"📊 库存：`{stock}`\n"
+            f"📁 分类：{escape_markdown(cat_name)}\n\n"
+            f"👇 选择操作：",
             reply_markup=get_product_action_keyboard(product_key, category_id),
             parse_mode="Markdown"
         )
@@ -1008,87 +1285,162 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if data.startswith("cp_"):
         product_key = data[3:]
-        if safe_product_get(product_key):
-            context.user_data['changing_price'] = product_key
-            await query.edit_message_text("💰 请输入新价格 (USDT)：", parse_mode="Markdown")
+        prod = safe_product_get(product_key)
+        if not prod:
+            await query.edit_message_text("❌ 商品不存在")
+            return
+        context.user_data['changing_price'] = product_key
+        await query.edit_message_text(
+            f"💰 请输入 {escape_markdown(prod['name'])} 的新价格 (USDT)：",
+            parse_mode="Markdown"
+        )
         return
 
     if data.startswith("cd_"):
         product_key = data[3:]
-        if safe_product_get(product_key):
-            context.user_data['changing_desc'] = product_key
-            await query.edit_message_text("📝 请输入新描述：", parse_mode="Markdown")
+        prod = safe_product_get(product_key)
+        if not prod:
+            await query.edit_message_text("❌ 商品不存在")
+            return
+        context.user_data['changing_desc'] = product_key
+        await query.edit_message_text(
+            f"📝 请输入 {escape_markdown(prod['name'])} 的新描述：",
+            parse_mode="Markdown"
+        )
         return
 
     if data.startswith("as_"):
         product_key = data[3:]
-        if safe_product_get(product_key):
-            context.user_data['awaiting_stock'] = product_key
-            await query.edit_message_text("📦 *添加卡密*\n\n每行一个卡密\n也可以发送 .txt 文件\n发送「跳过」可不添加：", parse_mode="Markdown")
+        prod = safe_product_get(product_key)
+        if not prod:
+            await query.edit_message_text("❌ 商品不存在")
+            return
+        context.user_data['awaiting_stock'] = product_key
+        await query.edit_message_text(
+            f"📦 *添加卡密到 {escape_markdown(prod['name'])}*\n\n"
+            f"每行一个卡密\n\n也可以直接发送 .txt 文件\n\n发送「跳过」可不添加：",
+            parse_mode="Markdown"
+        )
         return
 
     if data.startswith("vs_"):
         product_key = data[3:]
         prod = safe_product_get(product_key)
-        if prod:
-            product_cards = cards.get(product_key, [])
-            unused = [c for c in product_cards if not c.get('used', False)]
-            used = [c for c in product_cards if c.get('used', False)]
-            text = f"📋 *{escape_markdown(prod.get('name', '未知'))} 卡密*\n\n🔑 总计：{len(product_cards)}\n✅ 未使用：{len(unused)}\n❌ 已使用：{len(used)}"
-            try:
-                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data=f"am_{product_key}")]]), parse_mode="Markdown")
-            except:
-                await query.edit_message_text("卡密包含特殊字符无法显示", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data=f"am_{product_key}")]]))
+        if not prod:
+            await query.edit_message_text("❌ 商品不存在")
+            return
+        product_cards = cards.get(product_key, [])
+        unused = [c for c in product_cards if not c.get('used', False)]
+        used = [c for c in product_cards if c.get('used', False)]
+        safe_name = escape_markdown(prod.get('name', '未知'))
+        text = f"📋 *{safe_name} 卡密列表*\n\n🔑 总计：{len(product_cards)}\n✅ 未使用：{len(unused)}\n❌ 已使用：{len(used)}\n\n"
+        if unused:
+            text += "*未使用（最近10条）：*\n"
+            for c in unused[-10:]:
+                text += f"`{escape_markdown(str(c['card']))}`\n"
+        try:
+            await query.edit_message_text(
+                text,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data=f"am_{product_key}")]]),
+                parse_mode="Markdown"
+            )
+        except Exception:
+            await query.edit_message_text(
+                "卡密列表包含特殊字符无法显示",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data=f"am_{product_key}")]])
+            )
         return
 
     if data.startswith("dp_"):
         product_key = data[3:]
         prod = safe_product_get(product_key)
-        if prod:
-            category_id = prod.get('category_id', '')
-            del products[product_key]
-            if product_key in cards:
-                del cards[product_key]
-            save_all_data()
-            await query.edit_message_text(f"✅ 已删除商品", reply_markup=get_products_by_category(category_id, True))
+        if not prod:
+            await query.edit_message_text("❌ 商品不存在")
+            return
+        product_name = prod.get('name', '未知')
+        category_id = prod.get('category_id', '')
+        del products[product_key]
+        if product_key in cards:
+            del cards[product_key]
+        save_all_data()
+        await query.edit_message_text(
+            f"✅ 已删除商品：{escape_markdown(product_name)}",
+            reply_markup=get_products_by_category(category_id, True),
+            parse_mode="Markdown"
+        )
         return
 
     if data.startswith("rp_"):
         product_key = data[3:]
-        if safe_product_get(product_key):
-            context.user_data['renaming_product'] = product_key
-            await query.edit_message_text("✏️ 请输入新名称：", parse_mode="Markdown")
+        prod = safe_product_get(product_key)
+        if not prod:
+            await query.edit_message_text("❌ 商品不存在")
+            return
+        context.user_data['renaming_product'] = product_key
+        await query.edit_message_text(
+            f"✏️ 请输入商品的新名称：\n\n当前名称：{escape_markdown(prod.get('name', '未知'))}",
+            parse_mode="Markdown"
+        )
         return
 
     if data == "admin_stats":
         total_users = len(user_balances)
         total_revenue = sum(o.get('price_usdt', 0) for o in orders.values())
         total_orders = len(orders)
-        await query.edit_message_text(f"📊 *店铺统计*\n\n👥 用户数：{total_users}\n📦 订单数：{total_orders}\n💰 营业额：{total_revenue:.2f} USDT\n📦 商品数：{len(products)}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="admin_panel")]]), parse_mode="Markdown")
+        total_products = len(products)
+        await query.edit_message_text(
+            f"📊 *店铺统计*\n\n"
+            f"👥 用户数：{total_users}\n"
+            f"📦 订单数：{total_orders}\n"
+            f"💰 营业额：{total_revenue:.2f} USDT\n"
+            f"📦 商品数：{total_products}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="admin_panel")]]),
+            parse_mode="Markdown"
+        )
         return
 
     if data == "admin_orders":
         if not orders:
             await query.edit_message_text("暂无订单")
             return
-        text = "📋 *最近20条订单*\n\n" + "\n".join(f"`{oid}` | {o.get('user_id', '')[-6:]} | {escape_markdown(o.get('product_name', ''))} | {o.get('price_usdt', 0)} USDT" for oid, o in list(orders.items())[-20:])
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="admin_panel")]]), parse_mode="Markdown")
+        text = "📋 *最近20条订单*\n\n"
+        for oid, o in list(orders.items())[-20:]:
+            safe_name = escape_markdown(o.get('product_name', 'unknown'))
+            text += f"`{oid}` | {o.get('user_id', 'unknown')[-6:]} | {safe_name} | {o.get('price_usdt', 0)} USDT\n"
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="admin_panel")]]),
+            parse_mode="Markdown"
+        )
         return
 
     if data == "admin_recharge_records":
         if not recharge_orders:
             await query.edit_message_text("暂无充值记录")
             return
-        text = "💰 *充值记录*\n\n" + "\n".join(f"{'✅' if o.get('status')=='completed' else '⏳'} `{oid}` | {o['amount']} USDT | {o['user_id'][-6:]}" for oid, o in list(recharge_orders.items())[-20:])
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="admin_panel")]]), parse_mode="Markdown")
+        text = "💰 *充值记录*\n\n"
+        for order_no, order in list(recharge_orders.items())[-20:]:
+            status_emoji = "✅" if order.get("status") == "completed" else "⏳"
+            text += f"{status_emoji} `{order_no}` | {order['amount']} USDT | {order['user_id'][-6:]}\n"
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="admin_panel")]]),
+            parse_mode="Markdown"
+        )
         return
 
     if data == "admin_balance":
         result = await okpay_balance()
         if result.get('code') == 200:
             balances = result.get('data', {})
-            text = "💎 *商户余额*\n\n" + "\n".join(f"{coin.upper()}: `{bal}`" for coin, bal in balances.items())
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="admin_panel")]]), parse_mode="Markdown")
+            text = "💎 *商户余额*\n\n"
+            for coin, bal in balances.items():
+                text += f"{coin.upper()}: `{bal}`\n"
+            await query.edit_message_text(
+                text,
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="admin_panel")]])
+            )
         else:
             await query.edit_message_text(f"❌ 查询失败: {result.get('msg')}")
         return
@@ -1097,6 +1449,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if not is_admin(user_id):
+        await update.message.reply_text("⛔ 权限不足")
         return
 
     document = update.message.document
@@ -1129,6 +1482,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         prod = safe_product_get(product_key)
 
         if not prod:
+            await update.message.reply_text("❌ 商品不存在")
             context.user_data.pop('awaiting_stock', None)
             return
 
@@ -1136,9 +1490,18 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         current_stock = get_product_stock(product_key)
 
         category_id = prod.get('category_id', '')
-        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回商品分类", callback_data=f"cat_{category_id}")]]) if category_id else None
+        reply_markup = None
+        if category_id:
+            reply_markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 返回商品分类", callback_data=f"cat_{category_id}")
+            ]])
 
-        await update.message.reply_text(f"✅ 已添加 {added} 个卡密\n\n📊 当前库存：{current_stock} 个\n\n商品已上架成功！", reply_markup=reply_markup)
+        await update.message.reply_text(
+            f"✅ 已添加 {added} 个卡密\n\n"
+            f"📊 当前库存：{current_stock} 个\n\n"
+            f"商品已上架成功！",
+            reply_markup=reply_markup
+        )
         context.user_data.pop('awaiting_stock', None)
     except Exception as e:
         logger.error(f"文件处理失败: {e}")
@@ -1159,26 +1522,37 @@ async def post_init(application: Application) -> None:
         try:
             await application.bot.send_message(
                 chat_id=admin_id,
-                text=f"🤖 *机器人已启动*\n\n📅 时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n📊 用户数: {len(user_balances)}\n📦 商品数: {len(products)}",
+                text=(
+                    f"🤖 *机器人已启动*\n\n"
+                    f"📅 时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"👥 管理员数量: {len(ADMIN_USER_IDS)}\n"
+                    f"👤 管理员列表: {ADMIN_USER_IDS}\n"
+                    f"📊 当前用户数: {len(user_balances)}\n"
+                    f"📦 商品数: {len(products)}"
+                ),
                 parse_mode="Markdown"
             )
         except Exception as e:
-            logger.error(f"启动通知失败: {e}")
+            logger.error(f"启动通知管理员失败: {e}")
 
 def main() -> None:
     application = Application.builder().token(TOKEN).post_init(post_init).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("cancel", cancel_operation))
-    application.add_handler(CommandHandler("refresh", refresh_data))
-    application.add_handler(CommandHandler("fix", fix_data))
+    application.add_handler(CommandHandler("refresh", refresh_data_cmd))
+    application.add_handler(CommandHandler("fix", fix_data_cmd))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_all_messages))
 
-    print("🤖 机器人已启动！")
-    print(f"👥 管理员: {ADMIN_USER_IDS}")
-    print(f"📦 商品数: {len(products)}")
-    print(f"👥 用户数: {len(user_balances)}")
+    print("🤖 自助购买机器人已启动！")
+    print(f"👥 管理员配置:")
+    print(f"   👤 管理员列表: {ADMIN_USER_IDS}")
+    print(f"📂 固定分类：{list(FIXED_CATEGORIES.values())}")
+    print(f"📦 商品数量：{len(products)}")
+    print(f"👥 用户数量：{len(user_balances)}")
+    print(f"📦 订单数量：{len(orders)}")
+    print("📢 广播功能已启用 - 所有管理员都能看到广播按钮")
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
