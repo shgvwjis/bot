@@ -28,7 +28,7 @@ from telegram.ext import (
 )
 
 # ================== 配置区域 ==================
-TOKEN = "8829453900:AAETRcClUIEEJ9E6HVLXgKYbvjzYwbpTphI"
+TOKEN = "8802216429:AAERhPJ8p1_v5H5kkADl0aXvcs7iZzKy-B4"
 ADMIN_USER_IDS = [8275659025, 7002638062]
 
 API_URL = 'https://api.okaypay.me/shop/'
