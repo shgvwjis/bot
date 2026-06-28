@@ -38,7 +38,7 @@ def load_bots():
 
     bots_data = {}
     for bot_username, bot_info in all_bots.items():
-        owner_id = str(bot_info['owner'])
+        owner_id = str(bot_info['owner_id'])  # 修复：owner_id
         if owner_id not in bots_data:
             bots_data[owner_id] = {"bots": []}
         bots_data[owner_id]["bots"].append({
@@ -1731,7 +1731,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 invalid_bots.append({
                     'username': bot_username,
-                    'owner': bot_info['owner'],
+                    'owner': bot_info['owner_id'],
                     'token': bot_info['token'][:20] + "...",
                     'error': str(e)
                 })
